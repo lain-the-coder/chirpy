@@ -18,6 +18,7 @@ func main() {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
 			http.Redirect(w, r, "/app/", http.StatusSeeOther)
+			return
 		}
 		http.NotFound(w, r)
 	})
