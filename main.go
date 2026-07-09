@@ -2,12 +2,17 @@ package main
 
 import "net/http"
 
+func HandlerReadiness(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
+}
+
 func main() {
 	mux := http.NewServeMux()
-	fileServer1 := http.FileServer(http.Dir("."))
-	fileServer2 := http.FileServer(http.Dir("./assets"))
-	mux.Handle("/", fileServer1)
-	mux.Handle("/assets/", http.StripPrefix("/assets/", fileServer2))
+	fileServer := http.FileServer(http.Dir("."))
+	mux.Handle("/app/", http.StripPrefix("/app/", fileServer))
+	mux.HandleFunc("/healthz", HandlerReadiness)
 	server := &http.Server{
 		Addr:    ":8080",
 		Handler: mux,
