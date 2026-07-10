@@ -48,16 +48,20 @@ func HandlerReadiness(w http.ResponseWriter, r *http.Request) {
 }
 
 func respondWithError(w http.ResponseWriter, msg string, statusCode int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
 	errorBody := errorResponse{}
 	errorBody.Error = msg
-	dat, err := json.Marshal(errorBody)
+	respondWithJSON(w, statusCode, errorBody)
+}
+
+func respondWithJSON(w http.ResponseWriter, statusCode int, payload any) {
+	w.Header().Set("Content-Type", "application/json")
+	dat, err := json.Marshal(payload)
 	if err != nil {
 		log.Printf("Error marshalling JSON: %s", err)
 		w.WriteHeader(500)
 		return
 	}
+	w.WriteHeader(statusCode)
 	w.Write(dat)
 }
 
@@ -80,16 +84,8 @@ func HandlerValidateChirp(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, "Chirp is too long", http.StatusBadRequest)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
 	respBody.Valid = true
-	dat, err := json.Marshal(respBody)
-	if err != nil {
-		log.Printf("Error marshalling JSON: %s", err)
-		w.WriteHeader(500)
-		return
-	}
-	w.Write(dat)
+	respondWithJSON(w, http.StatusOK, respBody)
 }
 
 func main() {
