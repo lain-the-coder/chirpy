@@ -1,16 +1,23 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
+
+	"github.com/joho/godotenv"
+	"github.com/lain-the-coder/chirpy/internal/database"
+	_ "github.com/lib/pq"
 )
 
 type apiConfig struct {
 	fileServerHits atomic.Int32
+	db             *database.Queries
 }
 
 // declaring error response struct globally for free use
@@ -114,7 +121,21 @@ func HandlerValidateChirp(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	mux := http.NewServeMux()
-	cfg := &apiConfig{}
+
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
+	dbURL := os.Getenv("DB_URL")
+	rawDB, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatalf("error opening database: %v", err)
+	}
+	db := database.New(rawDB)
+
+	cfg := &apiConfig{
+		db: db,
+	}
 
 	fileServer := http.FileServer(http.Dir("."))
 
