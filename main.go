@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync/atomic"
 )
 
 type apiConfig struct {
 	fileServerHits atomic.Int32
 }
+
+// declaring error response struct globally for free use
 type errorResponse struct {
 	Error string `json:"error"`
 }
@@ -47,9 +50,11 @@ func HandlerReadiness(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("OK"))
 }
 
+// generic helper function for error construction
 func respondWithError(w http.ResponseWriter, msg string, statusCode int) {
 	errorBody := errorResponse{}
 	errorBody.Error = msg
+	// delegating json construction to helper function
 	respondWithJSON(w, statusCode, errorBody)
 }
 
@@ -65,26 +70,45 @@ func respondWithJSON(w http.ResponseWriter, statusCode int, payload any) {
 	w.Write(dat)
 }
 
+func cleanString(sentence string, replacements []string) string {
+	words := strings.Split(sentence, " ")
+	for i := range words {
+		for _, replacement := range replacements {
+			if strings.ToLower(words[i]) == replacement {
+				words[i] = "****"
+				break // once a match for that word is found then break this loop and check next work immediately; performance save
+			}
+		}
+	}
+	newSentence := strings.Join(words, " ")
+	return newSentence
+}
+
 func HandlerValidateChirp(w http.ResponseWriter, r *http.Request) {
 	type validateChirpRequest struct {
 		Body string `json:"body"`
 	}
 	type validateChirpResponse struct {
-		Valid bool `json:"valid"`
+		CleanedBody string `json:"cleaned_body"`
 	}
 	reqBody := validateChirpRequest{}
 	respBody := validateChirpResponse{}
 	err := json.NewDecoder(r.Body).Decode(&reqBody)
 	if err != nil {
 		log.Printf("Error decoding parameters: %s", err)
+		// delegating error structuring to helper function
 		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
 		return
 	}
+	// character length validation
 	if len(reqBody.Body) > 140 {
 		respondWithError(w, "Chirp is too long", http.StatusBadRequest)
 		return
 	}
-	respBody.Valid = true
+	// profanity validation
+	replacements := []string{"kerfuffle", "sharbert", "fornax"}
+	respBody.CleanedBody = cleanString(reqBody.Body, replacements)
+	//delegating json construction to helper function
 	respondWithJSON(w, http.StatusOK, respBody)
 }
 
