@@ -19,9 +19,16 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 
 func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
 	hits := cfg.fileServerHits.Load()
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	htmlTemplate := `<html>
+  						<body>
+    						<h1>Welcome, Chirpy Admin</h1>
+    						<p>Chirpy has been visited %d times!</p>
+  						</body>
+					</html>`
+	htmlString := fmt.Sprintf(htmlTemplate, hits)
+	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(fmt.Sprintf("Hits: %d", hits)))
+	w.Write([]byte(htmlString))
 }
 
 func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
@@ -43,14 +50,10 @@ func main() {
 
 	mux.Handle("/app/", cfg.middlewareMetricsInc(http.StripPrefix("/app/", fileServer)))
 	mux.HandleFunc("GET /api/healthz", HandlerReadiness)
-	mux.HandleFunc("GET /api/metrics", cfg.handlerMetrics)
-	mux.HandleFunc("POST /api/reset", cfg.handlerReset)
+	mux.HandleFunc("GET /admin/metrics", cfg.handlerMetrics)
+	mux.HandleFunc("POST /admin/reset", cfg.handlerReset)
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
-			http.Redirect(w, r, "/app/", http.StatusSeeOther)
-			return
-		}
-		http.NotFound(w, r)
+		http.Redirect(w, r, "/app/", http.StatusSeeOther)
 	})
 
 	server := &http.Server{
