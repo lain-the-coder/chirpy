@@ -11,6 +11,9 @@ import (
 type apiConfig struct {
 	fileServerHits atomic.Int32
 }
+type errorResponse struct {
+	Error string `json:"error"`
+}
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -44,6 +47,20 @@ func HandlerReadiness(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("OK"))
 }
 
+func respondWithError(w http.ResponseWriter, msg string, statusCode int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	errorBody := errorResponse{}
+	errorBody.Error = msg
+	dat, err := json.Marshal(errorBody)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	w.Write(dat)
+}
+
 func HandlerValidateChirp(w http.ResponseWriter, r *http.Request) {
 	type validateChirpRequest struct {
 		Body string `json:"body"`
@@ -51,38 +68,16 @@ func HandlerValidateChirp(w http.ResponseWriter, r *http.Request) {
 	type validateChirpResponse struct {
 		Valid bool `json:"valid"`
 	}
-	type validateChirpError struct {
-		Error string `json:"error"`
-	}
 	reqBody := validateChirpRequest{}
 	respBody := validateChirpResponse{}
-	errorBody := validateChirpError{}
 	err := json.NewDecoder(r.Body).Decode(&reqBody)
 	if err != nil {
 		log.Printf("Error decoding parameters: %s", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		errorBody.Error = "Something went wrong"
-		dat, err := json.Marshal(errorBody)
-		if err != nil {
-			log.Printf("Error marshalling JSON: %s", err)
-			w.WriteHeader(500)
-			return
-		}
-		w.Write(dat)
+		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
 		return
 	}
 	if len(reqBody.Body) > 140 {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		errorBody.Error = "Chirp is too long"
-		dat, err := json.Marshal(errorBody)
-		if err != nil {
-			log.Printf("Error marshalling JSON: %s", err)
-			w.WriteHeader(500)
-			return
-		}
-		w.Write(dat)
+		respondWithError(w, "Chirp is too long", http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
