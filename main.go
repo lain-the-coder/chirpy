@@ -199,6 +199,32 @@ func (cfg *apiConfig) HandleCreateChirp(w http.ResponseWriter, r *http.Request) 
 	respondWithJSON(w, http.StatusCreated, resBody)
 }
 
+func (cfg *apiConfig) HandleGetChirps(w http.ResponseWriter, r *http.Request) {
+	data, err := cfg.db.GetChirps(r.Context())
+	if err != nil {
+		log.Printf("Error retrieving records from database: %s", err)
+		// delegating error structuring to helper function
+		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+	type GetChirpResponse struct {
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Body      string    `json:"body"`
+		UserID    uuid.UUID `json:"user_id"`
+	}
+	chirps := make([]GetChirpResponse, len(data))
+	for i := range data {
+		chirps[i].ID = data[i].ID
+		chirps[i].CreatedAt = data[i].CreatedAt
+		chirps[i].UpdatedAt = data[i].UpdatedAt
+		chirps[i].Body = data[i].Body
+		chirps[i].UserID = data[i].UserID
+	}
+	respondWithJSON(w, http.StatusOK, chirps)
+}
+
 func main() {
 	mux := http.NewServeMux()
 
@@ -234,6 +260,7 @@ func main() {
 	// Enduser endpoints
 	mux.HandleFunc("POST /api/users", cfg.HandlerCreateUser)
 	mux.HandleFunc("POST /api/chirps", cfg.HandleCreateChirp)
+	mux.HandleFunc("GET /api/chirps", cfg.HandleGetChirps)
 
 	// Homepage
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
