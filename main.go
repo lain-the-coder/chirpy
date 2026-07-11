@@ -9,7 +9,9 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	"github.com/lain-the-coder/chirpy/internal/database"
 	_ "github.com/lib/pq"
@@ -119,6 +121,46 @@ func HandlerValidateChirp(w http.ResponseWriter, r *http.Request) {
 	respondWithJSON(w, http.StatusOK, respBody)
 }
 
+func (cfg *apiConfig) HandlerCreateUser(w http.ResponseWriter, r *http.Request) {
+	type createUserRequest struct {
+		Email string `json:"email"`
+	}
+	type createUserResponse struct {
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Email     string    `json:"email"`
+	}
+	reqBody := createUserRequest{}
+	err := json.NewDecoder(r.Body).Decode(&reqBody)
+	if err != nil {
+		log.Printf("Error decoding parameters: %s", err)
+		// delegating error structuring to helper function
+		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+	reqBody.Email = strings.TrimSpace(reqBody.Email)
+	if reqBody.Email == "" {
+		log.Printf("Email is blank")
+		respondWithError(w, "Email cannot be blank", http.StatusBadRequest)
+		return
+	}
+	user, err := cfg.db.CreateUser(r.Context(), reqBody.Email)
+	if err != nil {
+		log.Printf("Error inserting record into database: %s", err)
+		// delegating error structuring to helper function
+		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+	resBody := createUserResponse{
+		ID:        user.ID,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+	}
+	respondWithJSON(w, http.StatusCreated, resBody)
+}
+
 func main() {
 	mux := http.NewServeMux()
 
@@ -144,6 +186,7 @@ func main() {
 	mux.HandleFunc("GET /admin/metrics", cfg.handlerMetrics)
 	mux.HandleFunc("POST /admin/reset", cfg.handlerReset)
 	mux.HandleFunc("POST /api/validate_chirp", HandlerValidateChirp)
+	mux.HandleFunc("POST /api/users", cfg.HandlerCreateUser)
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/app/", http.StatusSeeOther)
 	})
