@@ -20,6 +20,7 @@ import (
 type apiConfig struct {
 	fileServerHits atomic.Int32
 	db             *database.Queries
+	platform       string
 }
 
 // declaring error response struct globally for free use
@@ -49,6 +50,17 @@ func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
+	if cfg.platform != "dev" {
+		respondWithError(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+	err := cfg.db.ResetUser(r.Context())
+	if err != nil {
+		log.Printf("Error deleting all user records: %s", err)
+		// delegating error structuring to helper function
+		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
 	cfg.fileServerHits.Store(0)
 	w.WriteHeader(http.StatusOK)
 }
@@ -169,6 +181,7 @@ func main() {
 		log.Fatal("Error loading .env file")
 	}
 	dbURL := os.Getenv("DB_URL")
+	platform := os.Getenv("PLATFORM")
 	rawDB, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Fatalf("error opening database: %v", err)
@@ -176,7 +189,8 @@ func main() {
 	db := database.New(rawDB)
 
 	cfg := &apiConfig{
-		db: db,
+		db:       db,
+		platform: platform,
 	}
 
 	fileServer := http.FileServer(http.Dir("."))
