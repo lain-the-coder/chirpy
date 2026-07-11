@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -225,6 +226,43 @@ func (cfg *apiConfig) HandleGetChirps(w http.ResponseWriter, r *http.Request) {
 	respondWithJSON(w, http.StatusOK, chirps)
 }
 
+func (cfg *apiConfig) HandleGetChirp(w http.ResponseWriter, r *http.Request) {
+	chirpIDStr := r.PathValue("chirpID")
+	chirpID, err := uuid.Parse(chirpIDStr)
+	if err != nil {
+		log.Printf("Error parsing chirp ID: %s", err)
+		respondWithError(w, "Invalid chirp ID", http.StatusBadRequest)
+		return
+	}
+
+	chirp, err := cfg.db.GetChirp(r.Context(), chirpID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			respondWithError(w, "Chirp not found", http.StatusNotFound)
+			return
+		}
+		log.Printf("Error retrieving chirp from database: %s", err)
+		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+
+	type GetChirpResponse struct {
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Body      string    `json:"body"`
+		UserID    uuid.UUID `json:"user_id"`
+	}
+	resBody := GetChirpResponse{
+		ID:        chirp.ID,
+		CreatedAt: chirp.CreatedAt,
+		UpdatedAt: chirp.UpdatedAt,
+		Body:      chirp.Body,
+		UserID:    chirp.UserID,
+	}
+	respondWithJSON(w, http.StatusOK, resBody)
+}
+
 func main() {
 	mux := http.NewServeMux()
 
@@ -261,6 +299,7 @@ func main() {
 	mux.HandleFunc("POST /api/users", cfg.HandlerCreateUser)
 	mux.HandleFunc("POST /api/chirps", cfg.HandleCreateChirp)
 	mux.HandleFunc("GET /api/chirps", cfg.HandleGetChirps)
+	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.HandleGetChirp)
 
 	// Homepage
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
