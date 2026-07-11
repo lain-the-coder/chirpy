@@ -105,34 +105,6 @@ func cleanString(sentence string, replacements []string) string {
 	return newSentence
 }
 
-func HandlerValidateChirp(w http.ResponseWriter, r *http.Request) {
-	type validateChirpRequest struct {
-		Body string `json:"body"`
-	}
-	type validateChirpResponse struct {
-		CleanedBody string `json:"cleaned_body"`
-	}
-	reqBody := validateChirpRequest{}
-	respBody := validateChirpResponse{}
-	err := json.NewDecoder(r.Body).Decode(&reqBody)
-	if err != nil {
-		log.Printf("Error decoding parameters: %s", err)
-		// delegating error structuring to helper function
-		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
-		return
-	}
-	// character length validation
-	if len(reqBody.Body) > 140 {
-		respondWithError(w, "Chirp is too long", http.StatusBadRequest)
-		return
-	}
-	// profanity validation
-	replacements := []string{"kerfuffle", "sharbert", "fornax"}
-	respBody.CleanedBody = cleanString(reqBody.Body, replacements)
-	//delegating json construction to helper function
-	respondWithJSON(w, http.StatusOK, respBody)
-}
-
 func (cfg *apiConfig) HandlerCreateUser(w http.ResponseWriter, r *http.Request) {
 	type createUserRequest struct {
 		Email string `json:"email"`
@@ -173,6 +145,60 @@ func (cfg *apiConfig) HandlerCreateUser(w http.ResponseWriter, r *http.Request) 
 	respondWithJSON(w, http.StatusCreated, resBody)
 }
 
+func (cfg *apiConfig) HandleCreateChirp(w http.ResponseWriter, r *http.Request) {
+	type CreateChirpRequest struct {
+		Body   string    `json:"body"`
+		UserID uuid.UUID `json:"user_id"`
+	}
+	type CreateChirpResponse struct {
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Body      string    `json:"body"`
+		UserID    uuid.UUID `json:"user_id"`
+	}
+	reqBody := CreateChirpRequest{}
+	err := json.NewDecoder(r.Body).Decode(&reqBody)
+	if err != nil {
+		log.Printf("Error decoding parameters: %s", err)
+		// delegating error structuring to helper function
+		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+	// character length validation
+	if len(reqBody.Body) > 140 {
+		respondWithError(w, "Chirp is too long", http.StatusBadRequest)
+		return
+	}
+	// profanity validation
+	replacements := []string{"kerfuffle", "sharbert", "fornax"}
+	reqBody.Body = cleanString(reqBody.Body, replacements)
+	reqBody.Body = strings.TrimSpace(reqBody.Body)
+	if reqBody.Body == "" {
+		log.Printf("Body is blank")
+		respondWithError(w, "Body cannot be blank", http.StatusBadRequest)
+		return
+	}
+	chirp, err := cfg.db.CreateChirp(r.Context(), database.CreateChirpParams{
+		Body:   reqBody.Body,
+		UserID: reqBody.UserID,
+	})
+	if err != nil {
+		log.Printf("Error inserting record into database: %s", err)
+		// delegating error structuring to helper function
+		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+	resBody := CreateChirpResponse{
+		ID:        chirp.ID,
+		CreatedAt: chirp.CreatedAt,
+		UpdatedAt: chirp.UpdatedAt,
+		Body:      chirp.Body,
+		UserID:    chirp.UserID,
+	}
+	respondWithJSON(w, http.StatusCreated, resBody)
+}
+
 func main() {
 	mux := http.NewServeMux()
 
@@ -195,12 +221,21 @@ func main() {
 
 	fileServer := http.FileServer(http.Dir("."))
 
+	// File serve
 	mux.Handle("/app/", cfg.middlewareMetricsInc(http.StripPrefix("/app/", fileServer)))
+
+	// Dummy endpoint
 	mux.HandleFunc("GET /api/healthz", HandlerReadiness)
+
+	// Admin endpoints
 	mux.HandleFunc("GET /admin/metrics", cfg.handlerMetrics)
 	mux.HandleFunc("POST /admin/reset", cfg.handlerReset)
-	mux.HandleFunc("POST /api/validate_chirp", HandlerValidateChirp)
+
+	// Enduser endpoints
 	mux.HandleFunc("POST /api/users", cfg.HandlerCreateUser)
+	mux.HandleFunc("POST /api/chirps", cfg.HandleCreateChirp)
+
+	// Homepage
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/app/", http.StatusSeeOther)
 	})
