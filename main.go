@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
+	"github.com/lain-the-coder/chirpy/internal/auth"
 	"github.com/lain-the-coder/chirpy/internal/database"
 	_ "github.com/lib/pq"
 )
@@ -108,7 +109,8 @@ func cleanString(sentence string, replacements []string) string {
 
 func (cfg *apiConfig) HandlerCreateUser(w http.ResponseWriter, r *http.Request) {
 	type createUserRequest struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 	type createUserResponse struct {
 		ID        uuid.UUID `json:"id"`
@@ -130,7 +132,22 @@ func (cfg *apiConfig) HandlerCreateUser(w http.ResponseWriter, r *http.Request) 
 		respondWithError(w, "Email cannot be blank", http.StatusBadRequest)
 		return
 	}
-	user, err := cfg.db.CreateUser(r.Context(), reqBody.Email)
+	if reqBody.Password == "" {
+		log.Printf("Password is blank")
+		respondWithError(w, "Password cannot be blank", http.StatusBadRequest)
+		return
+	}
+	hashedPassword, err := auth.HashPassword(reqBody.Password)
+	if err != nil {
+		log.Printf("Error hashing password: %s", err)
+		// delegating error structuring to helper function
+		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+	user, err := cfg.db.CreateUser(r.Context(), database.CreateUserParams{
+		Email:          reqBody.Email,
+		HashedPassword: hashedPassword,
+	})
 	if err != nil {
 		log.Printf("Error inserting record into database: %s", err)
 		// delegating error structuring to helper function
@@ -263,6 +280,71 @@ func (cfg *apiConfig) HandleGetChirp(w http.ResponseWriter, r *http.Request) {
 	respondWithJSON(w, http.StatusOK, resBody)
 }
 
+func (cfg *apiConfig) HandlerLoginUser(w http.ResponseWriter, r *http.Request) {
+	type LoginUserRequest struct {
+		Password string `json:"password"`
+		Email    string `json:"email"`
+	}
+	type createUserResponse struct {
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Email     string    `json:"email"`
+	}
+	reqBody := LoginUserRequest{}
+	err := json.NewDecoder(r.Body).Decode(&reqBody)
+	if err != nil {
+		log.Printf("Error decoding parameters: %s", err)
+		// delegating error structuring to helper function
+		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+	// basic validation of email/password to save a db trip
+	reqBody.Email = strings.TrimSpace(reqBody.Email)
+	if reqBody.Email == "" {
+		log.Printf("Email is blank")
+		respondWithError(w, "Email cannot be blank", http.StatusBadRequest)
+		return
+	}
+	if reqBody.Password == "" {
+		log.Printf("Password is blank")
+		respondWithError(w, "Password cannot be blank", http.StatusBadRequest)
+		return
+	}
+	user, err := cfg.db.GetUser(r.Context(), reqBody.Email)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// delegating error structuring to helper function
+			respondWithError(w, "Incorrect email or password", http.StatusUnauthorized)
+			return
+		}
+		log.Printf("Error retrieving user from database: %s", err)
+		// delegating error structuring to helper function
+		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+	match, err := auth.CheckPasswordHash(reqBody.Password, user.HashedPassword)
+	if err != nil {
+		log.Printf("Error running function check for hashed password: %s", err)
+		// delegating error structuring to helper function
+		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+	if !match {
+		log.Printf("Incorrect password: %s", err)
+		// delegating error structuring to helper function
+		respondWithError(w, "Incorrect email or password", http.StatusUnauthorized)
+		return
+	}
+	resBody := createUserResponse{
+		ID:        user.ID,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+	}
+	respondWithJSON(w, http.StatusOK, resBody)
+}
+
 func main() {
 	mux := http.NewServeMux()
 
@@ -297,6 +379,7 @@ func main() {
 
 	// Enduser endpoints
 	mux.HandleFunc("POST /api/users", cfg.HandlerCreateUser)
+	mux.HandleFunc("POST /api/login", cfg.HandlerLoginUser)
 	mux.HandleFunc("POST /api/chirps", cfg.HandleCreateChirp)
 	mux.HandleFunc("GET /api/chirps", cfg.HandleGetChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.HandleGetChirp)
