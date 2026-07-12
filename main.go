@@ -23,6 +23,7 @@ type apiConfig struct {
 	fileServerHits atomic.Int32
 	db             *database.Queries
 	platform       string
+	secret         string
 }
 
 // declaring error response struct globally for free use
@@ -165,8 +166,7 @@ func (cfg *apiConfig) HandlerCreateUser(w http.ResponseWriter, r *http.Request) 
 
 func (cfg *apiConfig) HandleCreateChirp(w http.ResponseWriter, r *http.Request) {
 	type CreateChirpRequest struct {
-		Body   string    `json:"body"`
-		UserID uuid.UUID `json:"user_id"`
+		Body string `json:"body"`
 	}
 	type CreateChirpResponse struct {
 		ID        uuid.UUID `json:"id"`
@@ -175,8 +175,21 @@ func (cfg *apiConfig) HandleCreateChirp(w http.ResponseWriter, r *http.Request) 
 		Body      string    `json:"body"`
 		UserID    uuid.UUID `json:"user_id"`
 	}
+	// prior to decoding request body check for valid auth header otherwise short circuit
+	authToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error getting bearer token: %s", err)
+		respondWithError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	IDPostValidation, err := auth.ValidateJWT(authToken, cfg.secret)
+	if err != nil {
+		log.Printf("Error validating token: %s", err)
+		respondWithError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 	reqBody := CreateChirpRequest{}
-	err := json.NewDecoder(r.Body).Decode(&reqBody)
+	err = json.NewDecoder(r.Body).Decode(&reqBody)
 	if err != nil {
 		log.Printf("Error decoding parameters: %s", err)
 		// delegating error structuring to helper function
@@ -199,7 +212,7 @@ func (cfg *apiConfig) HandleCreateChirp(w http.ResponseWriter, r *http.Request) 
 	}
 	chirp, err := cfg.db.CreateChirp(r.Context(), database.CreateChirpParams{
 		Body:   reqBody.Body,
-		UserID: reqBody.UserID,
+		UserID: IDPostValidation,
 	})
 	if err != nil {
 		log.Printf("Error inserting record into database: %s", err)
@@ -282,14 +295,16 @@ func (cfg *apiConfig) HandleGetChirp(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) HandlerLoginUser(w http.ResponseWriter, r *http.Request) {
 	type LoginUserRequest struct {
-		Password string `json:"password"`
-		Email    string `json:"email"`
+		Password         string `json:"password"`
+		Email            string `json:"email"`
+		ExpiresInSeconds *int   `json:"expires_in_seconds"`
 	}
 	type createUserResponse struct {
 		ID        uuid.UUID `json:"id"`
 		CreatedAt time.Time `json:"created_at"`
 		UpdatedAt time.Time `json:"updated_at"`
 		Email     string    `json:"email"`
+		Token     string    `json:"token"`
 	}
 	reqBody := LoginUserRequest{}
 	err := json.NewDecoder(r.Body).Decode(&reqBody)
@@ -310,6 +325,18 @@ func (cfg *apiConfig) HandlerLoginUser(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Password is blank")
 		respondWithError(w, "Password cannot be blank", http.StatusBadRequest)
 		return
+	}
+	// Set a default value for the optional field
+	defaultExpirationInSeconds := 3600 // 1 hour default
+	var finalExpiry int
+	if reqBody.ExpiresInSeconds != nil {
+		finalExpiry = *reqBody.ExpiresInSeconds
+	} else {
+		finalExpiry = defaultExpirationInSeconds
+	}
+	// Enforce a maximum cap
+	if finalExpiry > 3600 {
+		finalExpiry = 3600
 	}
 	user, err := cfg.db.GetUser(r.Context(), reqBody.Email)
 	if err != nil {
@@ -336,11 +363,19 @@ func (cfg *apiConfig) HandlerLoginUser(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, "Incorrect email or password", http.StatusUnauthorized)
 		return
 	}
+	token, err := auth.MakeJWT(user.ID, cfg.secret, time.Duration(finalExpiry)*time.Second)
+	if err != nil {
+		log.Printf("Error running function for token generation: %s", err)
+		// delegating error structuring to helper function
+		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
 	resBody := createUserResponse{
 		ID:        user.ID,
 		CreatedAt: user.CreatedAt,
 		UpdatedAt: user.UpdatedAt,
 		Email:     user.Email,
+		Token:     token,
 	}
 	respondWithJSON(w, http.StatusOK, resBody)
 }
@@ -354,6 +389,7 @@ func main() {
 	}
 	dbURL := os.Getenv("DB_URL")
 	platform := os.Getenv("PLATFORM")
+	secret := os.Getenv("SECRET")
 	rawDB, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Fatalf("error opening database: %v", err)
@@ -363,6 +399,7 @@ func main() {
 	cfg := &apiConfig{
 		db:       db,
 		platform: platform,
+		secret:   secret,
 	}
 
 	fileServer := http.FileServer(http.Dir("."))
