@@ -24,6 +24,7 @@ type apiConfig struct {
 	db             *database.Queries
 	platform       string
 	secret         string
+	apiKey         string
 }
 
 // declaring error response struct globally for free use
@@ -567,6 +568,17 @@ func (cfg *apiConfig) HandlerDeleteChirp(w http.ResponseWriter, r *http.Request)
 }
 
 func (cfg *apiConfig) HandlerPolkaWebhooks(w http.ResponseWriter, r *http.Request) {
+	apiKey, err := auth.GetAPIKey(r.Header)
+	if err != nil {
+		log.Printf("Error getting api key: %s", err)
+		respondWithError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if apiKey != cfg.apiKey {
+		log.Printf("api key does not match")
+		respondWithError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 	type DataRequest struct {
 		UserID uuid.UUID `json:"user_id"`
 	}
@@ -575,7 +587,7 @@ func (cfg *apiConfig) HandlerPolkaWebhooks(w http.ResponseWriter, r *http.Reques
 		Data  DataRequest `json:"data"`
 	}
 	reqBody := PolkaWebHookRequest{}
-	err := json.NewDecoder(r.Body).Decode(&reqBody)
+	err = json.NewDecoder(r.Body).Decode(&reqBody)
 	if err != nil {
 		log.Printf("Error decoding parameters: %s", err)
 		// delegating error structuring to helper function
@@ -611,6 +623,7 @@ func main() {
 	dbURL := os.Getenv("DB_URL")
 	platform := os.Getenv("PLATFORM")
 	secret := os.Getenv("SECRET")
+	apiKey := os.Getenv("POLKA_KEY")
 	rawDB, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Fatalf("error opening database: %v", err)
@@ -621,6 +634,7 @@ func main() {
 		db:       db,
 		platform: platform,
 		secret:   secret,
+		apiKey:   apiKey,
 	}
 
 	fileServer := http.FileServer(http.Dir("."))
