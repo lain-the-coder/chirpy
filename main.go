@@ -234,7 +234,21 @@ func (cfg *apiConfig) HandleCreateChirp(w http.ResponseWriter, r *http.Request) 
 }
 
 func (cfg *apiConfig) HandleGetChirps(w http.ResponseWriter, r *http.Request) {
-	data, err := cfg.db.GetChirps(r.Context())
+	authorIDStr := r.URL.Query().Get("author_id")
+
+	var data []database.Chirp
+	var err error
+	if authorIDStr == "" {
+		data, err = cfg.db.GetChirps(r.Context())
+	} else {
+		authorID, parseErr := uuid.Parse(authorIDStr)
+		if parseErr != nil {
+			log.Printf("Error parsing author_id: %s", parseErr)
+			respondWithError(w, "Invalid author_id", http.StatusBadRequest)
+			return
+		}
+		data, err = cfg.db.GetChirpsByAuthor(r.Context(), authorID)
+	}
 	if err != nil {
 		log.Printf("Error retrieving records from database: %s", err)
 		// delegating error structuring to helper function
