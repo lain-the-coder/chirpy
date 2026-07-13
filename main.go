@@ -295,16 +295,16 @@ func (cfg *apiConfig) HandleGetChirp(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) HandlerLoginUser(w http.ResponseWriter, r *http.Request) {
 	type LoginUserRequest struct {
-		Password         string `json:"password"`
-		Email            string `json:"email"`
-		ExpiresInSeconds *int   `json:"expires_in_seconds"`
+		Password string `json:"password"`
+		Email    string `json:"email"`
 	}
 	type createUserResponse struct {
-		ID        uuid.UUID `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Email     string    `json:"email"`
-		Token     string    `json:"token"`
+		ID           uuid.UUID `json:"id"`
+		CreatedAt    time.Time `json:"created_at"`
+		UpdatedAt    time.Time `json:"updated_at"`
+		Email        string    `json:"email"`
+		Token        string    `json:"token"`
+		RefreshToken string    `json:"refresh_token"`
 	}
 	reqBody := LoginUserRequest{}
 	err := json.NewDecoder(r.Body).Decode(&reqBody)
@@ -328,16 +328,7 @@ func (cfg *apiConfig) HandlerLoginUser(w http.ResponseWriter, r *http.Request) {
 	}
 	// Set a default value for the optional field
 	defaultExpirationInSeconds := 3600 // 1 hour default
-	var finalExpiry int
-	if reqBody.ExpiresInSeconds != nil {
-		finalExpiry = *reqBody.ExpiresInSeconds
-	} else {
-		finalExpiry = defaultExpirationInSeconds
-	}
-	// Enforce a maximum cap
-	if finalExpiry > 3600 {
-		finalExpiry = 3600
-	}
+	defaultRefreshTokenExpiration := time.Now().UTC().Add(60 * 24 * time.Hour)
 	user, err := cfg.db.GetUser(r.Context(), reqBody.Email)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -363,21 +354,97 @@ func (cfg *apiConfig) HandlerLoginUser(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, "Incorrect email or password", http.StatusUnauthorized)
 		return
 	}
-	token, err := auth.MakeJWT(user.ID, cfg.secret, time.Duration(finalExpiry)*time.Second)
+	token, err := auth.MakeJWT(user.ID, cfg.secret, time.Duration(defaultExpirationInSeconds)*time.Second)
 	if err != nil {
 		log.Printf("Error running function for token generation: %s", err)
 		// delegating error structuring to helper function
 		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
 		return
 	}
+	// refresh token logic
+	refreshToken := auth.MakeRefreshToken()
+	_, err = cfg.db.CreateRefreshToken(r.Context(), database.CreateRefreshTokenParams{
+		Token:     refreshToken,
+		UserID:    user.ID,
+		ExpiresAt: defaultRefreshTokenExpiration,
+	})
+	if err != nil {
+		log.Printf("Error inserting record into database: %s", err)
+		// delegating error structuring to helper function
+		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
 	resBody := createUserResponse{
-		ID:        user.ID,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
-		Email:     user.Email,
-		Token:     token,
+		ID:           user.ID,
+		CreatedAt:    user.CreatedAt,
+		UpdatedAt:    user.UpdatedAt,
+		Email:        user.Email,
+		Token:        token,
+		RefreshToken: refreshToken,
 	}
 	respondWithJSON(w, http.StatusOK, resBody)
+}
+
+func (cfg *apiConfig) HandlerRefreshToken(w http.ResponseWriter, r *http.Request) {
+	type RefreshTokenResponse struct {
+		Token string `json:"token"`
+	}
+	refreshToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error getting bearer token: %s", err)
+		respondWithError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	refreshTokenRow, err := cfg.db.GetRefreshToken(r.Context(), refreshToken)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			log.Printf("Refresh token not present in db: %s", err)
+			respondWithError(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		log.Printf("Error retrieving refresh token from database: %s", err)
+		respondWithError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if time.Now().UTC().After(refreshTokenRow.ExpiresAt) {
+		log.Printf("Refresh token expired for user %s", refreshTokenRow.UserID)
+		respondWithError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if refreshTokenRow.RevokedAt.Valid {
+		log.Printf("Refresh token revoked for user %s", refreshTokenRow.UserID)
+		respondWithError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	defaultExpirationInSeconds := 3600 // 1 hour default
+	token, err := auth.MakeJWT(refreshTokenRow.UserID, cfg.secret, time.Duration(defaultExpirationInSeconds)*time.Second)
+	if err != nil {
+		log.Printf("Error running function for token generation: %s", err)
+		// delegating error structuring to helper function
+		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+	resBody := RefreshTokenResponse{
+		Token: token,
+	}
+	respondWithJSON(w, http.StatusOK, resBody)
+}
+
+func (cfg *apiConfig) HandlerRevokeRefreshToken(w http.ResponseWriter, r *http.Request) {
+	refreshToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error getting bearer token: %s", err)
+		respondWithError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	err = cfg.db.RevokeRefreshToken(r.Context(), refreshToken)
+	if err != nil {
+		log.Printf("Error updating refresh token table in db: %s", err)
+		// delegating error structuring to helper function
+		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func main() {
@@ -420,6 +487,8 @@ func main() {
 	mux.HandleFunc("POST /api/chirps", cfg.HandleCreateChirp)
 	mux.HandleFunc("GET /api/chirps", cfg.HandleGetChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.HandleGetChirp)
+	mux.HandleFunc("POST /api/refresh", cfg.HandlerRefreshToken)
+	mux.HandleFunc("POST /api/revoke", cfg.HandlerRevokeRefreshToken)
 
 	// Homepage
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
