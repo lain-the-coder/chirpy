@@ -114,10 +114,11 @@ func (cfg *apiConfig) HandlerCreateUser(w http.ResponseWriter, r *http.Request) 
 		Password string `json:"password"`
 	}
 	type createUserResponse struct {
-		ID        uuid.UUID `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Email     string    `json:"email"`
+		ID          uuid.UUID `json:"id"`
+		CreatedAt   time.Time `json:"created_at"`
+		UpdatedAt   time.Time `json:"updated_at"`
+		Email       string    `json:"email"`
+		IsChirpyRed bool      `json:"is_chirpy_red"`
 	}
 	reqBody := createUserRequest{}
 	err := json.NewDecoder(r.Body).Decode(&reqBody)
@@ -156,10 +157,11 @@ func (cfg *apiConfig) HandlerCreateUser(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	resBody := createUserResponse{
-		ID:        user.ID,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
-		Email:     user.Email,
+		ID:          user.ID,
+		CreatedAt:   user.CreatedAt,
+		UpdatedAt:   user.UpdatedAt,
+		Email:       user.Email,
+		IsChirpyRed: false,
 	}
 	respondWithJSON(w, http.StatusCreated, resBody)
 }
@@ -305,6 +307,7 @@ func (cfg *apiConfig) HandlerLoginUser(w http.ResponseWriter, r *http.Request) {
 		Email        string    `json:"email"`
 		Token        string    `json:"token"`
 		RefreshToken string    `json:"refresh_token"`
+		IsChirpyRed  bool      `json:"is_chirpy_red"`
 	}
 	reqBody := LoginUserRequest{}
 	err := json.NewDecoder(r.Body).Decode(&reqBody)
@@ -374,6 +377,14 @@ func (cfg *apiConfig) HandlerLoginUser(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
 		return
 	}
+	chirpyRed := false
+	if user.IsChirpyRed.Valid {
+		if user.IsChirpyRed.Bool {
+			chirpyRed = true
+		} else {
+			chirpyRed = false
+		}
+	}
 	resBody := createUserResponse{
 		ID:           user.ID,
 		CreatedAt:    user.CreatedAt,
@@ -381,6 +392,7 @@ func (cfg *apiConfig) HandlerLoginUser(w http.ResponseWriter, r *http.Request) {
 		Email:        user.Email,
 		Token:        token,
 		RefreshToken: refreshToken,
+		IsChirpyRed:  chirpyRed,
 	}
 	respondWithJSON(w, http.StatusOK, resBody)
 }
@@ -554,6 +566,41 @@ func (cfg *apiConfig) HandlerDeleteChirp(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (cfg *apiConfig) HandlerPolkaWebhooks(w http.ResponseWriter, r *http.Request) {
+	type DataRequest struct {
+		UserID uuid.UUID `json:"user_id"`
+	}
+	type PolkaWebHookRequest struct {
+		Event string      `json:"event"`
+		Data  DataRequest `json:"data"`
+	}
+	reqBody := PolkaWebHookRequest{}
+	err := json.NewDecoder(r.Body).Decode(&reqBody)
+	if err != nil {
+		log.Printf("Error decoding parameters: %s", err)
+		// delegating error structuring to helper function
+		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+	// if event field is anything other than user.upgraded immediately notify Polka that webhook was received succesfully
+	// no need to retry
+	if reqBody.Event != "user.upgraded" {
+		w.WriteHeader(http.StatusNoContent) // 204 status code
+		return
+	}
+	_, err = cfg.db.UpgradeUser(r.Context(), reqBody.Data.UserID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			respondWithError(w, "User not found", http.StatusNotFound)
+			return
+		}
+		log.Printf("Error updating user record in database database: %s", err)
+		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func main() {
 	mux := http.NewServeMux()
 
@@ -598,6 +645,7 @@ func main() {
 	mux.HandleFunc("DELETE /api/chirps/{chirpID}", cfg.HandlerDeleteChirp)
 	mux.HandleFunc("POST /api/refresh", cfg.HandlerRefreshToken)
 	mux.HandleFunc("POST /api/revoke", cfg.HandlerRevokeRefreshToken)
+	mux.HandleFunc("POST /api/polka/webhooks", cfg.HandlerPolkaWebhooks)
 
 	// Homepage
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
