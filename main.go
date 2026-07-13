@@ -510,6 +510,50 @@ func (cfg *apiConfig) HandlerUpdateUser(w http.ResponseWriter, r *http.Request) 
 	respondWithJSON(w, http.StatusOK, resBody)
 }
 
+func (cfg *apiConfig) HandlerDeleteChirp(w http.ResponseWriter, r *http.Request) {
+	authToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error getting bearer token: %s", err)
+		respondWithError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	IDPostValidation, err := auth.ValidateJWT(authToken, cfg.secret)
+	if err != nil {
+		log.Printf("Error validating token: %s", err)
+		respondWithError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	chirpIDStr := r.PathValue("chirpID")
+	chirpID, err := uuid.Parse(chirpIDStr)
+	if err != nil {
+		log.Printf("Error parsing chirp ID: %s", err)
+		respondWithError(w, "Invalid chirp ID", http.StatusBadRequest)
+		return
+	}
+	chirp, err := cfg.db.GetChirp(r.Context(), chirpID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			respondWithError(w, "Chirp not found", http.StatusNotFound)
+			return
+		}
+		log.Printf("Error retrieving chirp from database: %s", err)
+		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+	if chirp.UserID != IDPostValidation {
+		log.Printf("Chirp's user ID and user ID from token don't match")
+		respondWithError(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+	err = cfg.db.DeleteChirp(r.Context(), chirpID)
+	if err != nil {
+		log.Printf("Error deleting chirp from database: %s", err)
+		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func main() {
 	mux := http.NewServeMux()
 
@@ -551,6 +595,7 @@ func main() {
 	mux.HandleFunc("POST /api/chirps", cfg.HandleCreateChirp)
 	mux.HandleFunc("GET /api/chirps", cfg.HandleGetChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.HandleGetChirp)
+	mux.HandleFunc("DELETE /api/chirps/{chirpID}", cfg.HandlerDeleteChirp)
 	mux.HandleFunc("POST /api/refresh", cfg.HandlerRefreshToken)
 	mux.HandleFunc("POST /api/revoke", cfg.HandlerRevokeRefreshToken)
 
