@@ -447,6 +447,69 @@ func (cfg *apiConfig) HandlerRevokeRefreshToken(w http.ResponseWriter, r *http.R
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (cfg *apiConfig) HandlerUpdateUser(w http.ResponseWriter, r *http.Request) {
+	authToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error getting bearer token: %s", err)
+		respondWithError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	IDPostValidation, err := auth.ValidateJWT(authToken, cfg.secret)
+	if err != nil {
+		log.Printf("Error validating token: %s", err)
+		respondWithError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	type UpdateUserRequest struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	type UpdateUserResponse struct {
+		Email string `json:"email"`
+	}
+	reqBody := UpdateUserRequest{}
+	err = json.NewDecoder(r.Body).Decode(&reqBody)
+	if err != nil {
+		log.Printf("Error decoding parameters: %s", err)
+		// delegating error structuring to helper function
+		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+	reqBody.Email = strings.TrimSpace(reqBody.Email)
+	if reqBody.Email == "" {
+		log.Printf("Email is blank")
+		respondWithError(w, "Email cannot be blank", http.StatusBadRequest)
+		return
+	}
+	if reqBody.Password == "" {
+		log.Printf("Password is blank")
+		respondWithError(w, "Password cannot be blank", http.StatusBadRequest)
+		return
+	}
+	hashedPassword, err := auth.HashPassword(reqBody.Password)
+	if err != nil {
+		log.Printf("Error hashing password: %s", err)
+		// delegating error structuring to helper function
+		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+	email, err := cfg.db.UpdateUser(r.Context(), database.UpdateUserParams{
+		ID:             IDPostValidation,
+		Email:          reqBody.Email,
+		HashedPassword: hashedPassword,
+	})
+	if err != nil {
+		log.Printf("Error updating record into database: %s", err)
+		// delegating error structuring to helper function
+		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+	resBody := UpdateUserResponse{
+		Email: email,
+	}
+	respondWithJSON(w, http.StatusOK, resBody)
+}
+
 func main() {
 	mux := http.NewServeMux()
 
@@ -483,6 +546,7 @@ func main() {
 
 	// Enduser endpoints
 	mux.HandleFunc("POST /api/users", cfg.HandlerCreateUser)
+	mux.HandleFunc("PUT /api/users", cfg.HandlerUpdateUser)
 	mux.HandleFunc("POST /api/login", cfg.HandlerLoginUser)
 	mux.HandleFunc("POST /api/chirps", cfg.HandleCreateChirp)
 	mux.HandleFunc("GET /api/chirps", cfg.HandleGetChirps)
