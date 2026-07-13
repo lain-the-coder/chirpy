@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -235,6 +236,7 @@ func (cfg *apiConfig) HandleCreateChirp(w http.ResponseWriter, r *http.Request) 
 
 func (cfg *apiConfig) HandleGetChirps(w http.ResponseWriter, r *http.Request) {
 	authorIDStr := r.URL.Query().Get("author_id")
+	sortOrder := r.URL.Query().Get("sort")
 
 	var data []database.Chirp
 	var err error
@@ -251,9 +253,14 @@ func (cfg *apiConfig) HandleGetChirps(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		log.Printf("Error retrieving records from database: %s", err)
-		// delegating error structuring to helper function
 		respondWithError(w, "Something went wrong", http.StatusInternalServerError)
 		return
+	}
+
+	if sortOrder == "desc" {
+		sort.Slice(data, func(i, j int) bool {
+			return data[i].CreatedAt.After(data[j].CreatedAt)
+		})
 	}
 	type GetChirpResponse struct {
 		ID        uuid.UUID `json:"id"`
